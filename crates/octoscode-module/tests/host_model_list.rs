@@ -42,6 +42,11 @@ async fn refresh(wrong_session: bool) -> (Result<usize, String>, Vec<Value>, Str
                 "session/hydrate" => {
                     json!({"session_id": session, "cursor": {"stream": session, "seq": 2}, "messages": []})
                 }
+                "profile/llm/list" if session.is_null() => {
+                    reply["error"] =
+                        json!({"code": -32602, "message": "it names none of its sessions"});
+                    Value::Null
+                }
                 "profile/llm/list" => json!({
                     "session_id": if wrong_session { json!("_main:api:code-other") } else { session.clone() },
                     "models": [{"model": "glm-5", "provider": "zai-coding", "title": "GLM 5", "family": "zai-coding", "route": "zai-coding", "selected": true, "available": true}]
