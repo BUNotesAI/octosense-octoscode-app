@@ -696,8 +696,12 @@ pub async fn refresh(conv: &Conversation, store: &Store) -> Result<usize, String
         ("profile/sub_providers/list", fold_sub_providers),
     ] {
         let mut params = json!({ "profile_id": profile });
+        // The host's coding scope admits this read only on the app's session.
+        // That selects the kernel's session-shaped model list, not the profile
+        // configuration shape used by standalone connections.
+        let scoped_models = conv.is_hosted() && method == "profile/llm/list";
         let effective = method == "profile/skills/list" && store.domains.config.supported_features().iter().any(|f| f == "skills.effective_catalog.v1");
-        if effective { params["session_id"] = json!(session); }
+        if effective || scoped_models { params["session_id"] = json!(session); }
         let result = client.request(method, params).await;
         if conv.resource_identity() != identity { return Err("Session changed; stale resource reply discarded".into()); }
         match result {
@@ -707,7 +711,17 @@ pub async fn refresh(conv: &Conversation, store: &Store) -> Result<usize, String
                     let rows = if valid { v["effective_skills"].as_array().cloned() } else { None };
                     store.domains.profile.set_effective_skills(rows.map(|rows| json!({"session_id":session,"effective_skills":rows})));
                 }
-                fold(v, store);
+                if scoped_models {
+                    match super::board3::seats::models_from_result(&v, &session) {
+                        Ok(models) => store.domains.profile.set_llm_models(models),
+                        Err(e) => {
+                            errs.push(format!("{method}: {e}"));
+                            continue;
+                        }
+                    }
+                } else {
+                    fold(v, store);
+                }
                 done += 1;
             }
             Err(e) => errs.push(format!("{method}: {e}")),

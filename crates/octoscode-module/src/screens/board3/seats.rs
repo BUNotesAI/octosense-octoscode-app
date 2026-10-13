@@ -560,6 +560,20 @@ fn now_ms() -> u64 {
     super::ui::now_ms()
 }
 
+/// Shared validation for the menu and the hosted startup model read.
+pub(in crate::screens) fn models_from_result(v: &Value, session: &str) -> Result<Vec<ProfileLlmModel>, String> {
+    if v.get("session_id").and_then(|s| s.as_str()) != Some(session) {
+        return Err("profile/llm/list returned another session".to_owned());
+    }
+    match v.get("models").and_then(|m| m.as_array()) {
+        Some(rows) if rows.len() <= 500 => {
+            let models: Option<Vec<ProfileLlmModel>> = rows.iter().map(model_from).collect();
+            models.ok_or_else(|| "Invalid profile/llm/list result".to_owned())
+        }
+        _ => Err("Invalid profile/llm/list result".to_owned()),
+    }
+}
+
 /// `refresh` — `profile/llm/list {session_id, profile_id}` (the session
 /// picker list, `parseProfileLlmListResult`): echoed Session, at most 500
 /// rows, each a whole model; then the board's external-change check.
@@ -585,16 +599,7 @@ pub async fn load_models(conv: &crate::flow::Conversation) -> Result<String, Str
         return Ok("superseded".into());
     }
     let outcome = match r {
-        Ok(v) if v.get("session_id").and_then(|s| s.as_str()) != Some(session.as_str()) => {
-            Err("profile/llm/list returned another session".to_owned())
-        }
-        Ok(v) => match v.get("models").and_then(|m| m.as_array()) {
-            Some(rows) if rows.len() <= 500 => {
-                let models: Option<Vec<ProfileLlmModel>> = rows.iter().map(model_from).collect();
-                models.ok_or_else(|| "Invalid profile/llm/list result".to_owned())
-            }
-            _ => Err("Invalid profile/llm/list result".to_owned()),
-        },
+        Ok(v) => models_from_result(&v, &session),
         Err(e) => Err(crate::screens::dialog::display_error(&e.to_string())),
     };
     match outcome {
