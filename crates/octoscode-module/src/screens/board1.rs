@@ -1265,8 +1265,10 @@ pub async fn execute(work: Work, conv: Option<Arc<Conversation>>) -> Result<(), 
                     // never reintroduce the requested alias after its reply.
                     if !conv.is_hosted() {
                         let rows = super::recents::remember_workspace(
-                            &*super::recents::store(), &super::recents::endpoint(),
-                            &cwd, super::recents::now_ms(),
+                            &*super::recents::store(),
+                            &super::recents::endpoint(),
+                            &cwd,
+                            super::recents::now_ms(),
                         );
                         set_recent_workspaces(rows);
                     }

@@ -207,12 +207,24 @@ pub async fn apply(effect: Effect, conv: &Conversation) -> Result<(), String> {
     match effect {
         Effect::Refresh => refresh(conv).await,
         Effect::Open(cwd) => {
+            // #P4h1 row 305: the web remembers a workspace at the OPEN, not at
+            // a picker render (`App.tsx:1031` — `rememberWorkspace(storage,
+            // connection.endpoint, cwd)` on the open path). Recording it here
+            // is what makes the cache a production path rather than a helper
+            // only tests call (RULES 3). It is a navigation cache, so it is
+            // written AFTER the open request succeeds — a failed open must not leave a
+            // row the user never reached — and a write that fails never fails
+            // the open (the web catches the storage throw, and
+            // `remember_workspace` returns the new list either way).
+            // Hosted navigation instead waits for the acceptance event:
+            // open_workspace returning only means the request was sent.
             conv.open_workspace(Some(cwd.clone())).await?;
-            // Hosted navigation waits for the accepted session/open event.
-            // Returning from open_workspace only means the request was sent.
             if !conv.is_hosted() {
                 recents::remember_workspace(
-                    &*recents::store(), &recents::endpoint(), &cwd, recents::now_ms(),
+                    &*recents::store(),
+                    &recents::endpoint(),
+                    &cwd,
+                    recents::now_ms(),
                 );
             }
             Ok(())

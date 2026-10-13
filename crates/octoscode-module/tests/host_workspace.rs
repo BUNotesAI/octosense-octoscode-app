@@ -135,7 +135,7 @@ async fn open_via(requested: String, returned: String, entry: Entry) -> (bool, A
     if !matches!(entry, Entry::Direct) {
         assert_eq!(
             recents::load_recent_workspaces(&*recents::store(), &conv.http_base()).len(),
-            2,
+            3,
             "sending an open must not reconcile navigation before the reply is accepted"
         );
     }
@@ -239,6 +239,7 @@ async fn hosted_picker_open_unifies_recents_history_and_sidebar_after_acceptance
     let directory = Workspace::new();
     directory.symlink();
     let alias = directory.path("alias");
+    let unrelated = directory.path("other");
     let canonical = std::fs::canonicalize(directory.path("canonical"))
         .unwrap()
         .to_str()
@@ -250,6 +251,7 @@ async fn hosted_picker_open_unifies_recents_history_and_sidebar_after_acceptance
         let endpoint = octoscode_module::flow::HOST_ORIGIN;
         // Simulate an older cache containing both spellings, without migrating
         // any unrelated directory or needing a real kernel/model request.
+        recents::remember_workspace(&*storage, endpoint, &unrelated, 0);
         recents::remember_workspace(&*storage, endpoint, &canonical, 1);
         recents::remember_workspace(&*storage, endpoint, &alias, 2);
         let (accepted, conv) = open_via(alias.clone(), canonical.clone(), entry).await;
@@ -267,18 +269,19 @@ async fn hosted_picker_open_unifies_recents_history_and_sidebar_after_acceptance
         let projection = sidebar::project(&conv.store, recents::now_ms());
         assert_eq!(
             projection.groups.len(),
-            1,
-            "one real directory must not become two sidebar groups"
+            2,
+            "the opened directory must have one group alongside the unrelated workspace"
         );
         assert_eq!(projection.groups[0].key, canonical);
+        assert_eq!(projection.groups[1].key, unrelated);
         let rows = recents::load_recent_workspaces(&*storage, endpoint);
         assert_eq!(
             rows.iter().map(|r| &r.path).collect::<Vec<_>>(),
-            vec![&canonical]
+            vec![&canonical, &unrelated]
         );
         assert_eq!(
             recents::history_workspaces(&*storage, endpoint),
-            vec![canonical.clone()]
+            vec![canonical.clone(), unrelated.clone()]
         );
         assert_eq!(
             board1::picker()
@@ -286,7 +289,7 @@ async fn hosted_picker_open_unifies_recents_history_and_sidebar_after_acceptance
                 .iter()
                 .map(|(_, path)| path)
                 .collect::<Vec<_>>(),
-            vec![&canonical]
+            vec![&canonical, &unrelated]
         );
     }
 }
