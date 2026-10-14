@@ -18,6 +18,30 @@ use serde_json::{json, Value};
 // The navigation cache is process-wide, just as in the running app.
 static NAVIGATION: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+struct NavigationState {
+    endpoint: String,
+    storage: Arc<dyn recents::Storage>,
+}
+
+impl NavigationState {
+    fn isolated() -> Self {
+        let previous = Self {
+            endpoint: recents::endpoint(),
+            storage: recents::store(),
+        };
+        recents::set_connected_endpoint("https://navigation.example");
+        recents::set_store(Arc::new(recents::MemoryStore::new()));
+        previous
+    }
+}
+
+impl Drop for NavigationState {
+    fn drop(&mut self) {
+        recents::set_connected_endpoint(&self.endpoint);
+        recents::set_store(self.storage.clone());
+    }
+}
+
 struct Workspace(PathBuf);
 
 impl Workspace {
@@ -117,7 +141,6 @@ async fn open_via(requested: String, returned: String, entry: Entry) -> (bool, A
     };
     let (conv, mut events) = Conversation::connect_host(port, "_main", None, None).unwrap();
     let conv = Arc::new(conv);
-    recents::set_connected_endpoint(&conv.http_base());
     match entry {
         Entry::Direct => {
             conv.open_workspace(Some(requested)).await.unwrap();
@@ -134,7 +157,7 @@ async fn open_via(requested: String, returned: String, entry: Entry) -> (bool, A
     }
     if !matches!(entry, Entry::Direct) {
         assert_eq!(
-            recents::load_recent_workspaces(&*recents::store(), &conv.http_base()).len(),
+            recents::load_recent_workspaces(&*recents::store(), &recents::endpoint()).len(),
             3,
             "sending an open must not reconcile navigation before the reply is accepted"
         );
@@ -160,6 +183,7 @@ async fn open_via(requested: String, returned: String, entry: Entry) -> (bool, A
 #[tokio::test]
 async fn hosted_open_accepts_a_symlink_to_the_returned_workspace() {
     let _navigation = NAVIGATION.lock().await;
+    let _state = NavigationState::isolated();
     let workspace = Workspace::new();
     workspace.symlink();
     let canonical = std::fs::canonicalize(workspace.path("canonical"))
@@ -178,6 +202,7 @@ async fn hosted_open_accepts_a_symlink_to_the_returned_workspace() {
 #[tokio::test]
 async fn hosted_open_still_rejects_a_different_directory() {
     let _navigation = NAVIGATION.lock().await;
+    let _state = NavigationState::isolated();
     let workspace = Workspace::new();
     let (accepted, root) = open(workspace.path("canonical"), workspace.path("other")).await;
     assert!(!accepted);
@@ -187,6 +212,7 @@ async fn hosted_open_still_rejects_a_different_directory() {
 #[tokio::test]
 async fn hosted_open_does_not_equate_two_unresolvable_paths() {
     let _navigation = NAVIGATION.lock().await;
+    let _state = NavigationState::isolated();
     let workspace = Workspace::new();
     let (accepted, root) = open(workspace.path("missing-one"), workspace.path("missing-two")).await;
     assert!(!accepted);
@@ -196,6 +222,7 @@ async fn hosted_open_does_not_equate_two_unresolvable_paths() {
 #[tokio::test]
 async fn remote_open_does_not_use_local_path_equivalence_as_server_identity() {
     let _navigation = NAVIGATION.lock().await;
+    let _state = NavigationState::isolated();
     let workspace = Workspace::new();
     let canonical = std::fs::canonicalize(workspace.path("canonical"))
         .unwrap()
@@ -236,6 +263,7 @@ async fn remote_open_does_not_use_local_path_equivalence_as_server_identity() {
 #[tokio::test]
 async fn hosted_picker_open_unifies_recents_history_and_sidebar_after_acceptance() {
     let _navigation = NAVIGATION.lock().await;
+    let _state = NavigationState::isolated();
     let directory = Workspace::new();
     directory.symlink();
     let alias = directory.path("alias");
@@ -248,7 +276,7 @@ async fn hosted_picker_open_unifies_recents_history_and_sidebar_after_acceptance
     for entry in [Entry::Workspace, Entry::Picker] {
         let storage = Arc::new(recents::MemoryStore::new());
         recents::set_store(storage.clone());
-        let endpoint = octoscode_module::flow::HOST_ORIGIN;
+        let endpoint = &recents::endpoint();
         // Simulate an older cache containing both spellings, without migrating
         // any unrelated directory or needing a real kernel/model request.
         recents::remember_workspace(&*storage, endpoint, &unrelated, 0);
@@ -297,6 +325,7 @@ async fn hosted_picker_open_unifies_recents_history_and_sidebar_after_acceptance
 #[tokio::test]
 async fn hosted_open_preserves_exact_match_without_local_resolution() {
     let _navigation = NAVIGATION.lock().await;
+    let _state = NavigationState::isolated();
     let workspace = Workspace::new();
     let missing = workspace.path("missing");
     let (accepted, root) = open(missing.clone(), missing.clone()).await;
@@ -305,4 +334,47 @@ async fn hosted_open_preserves_exact_match_without_local_resolution() {
         "the existing exact-match rule does not resolve the path locally"
     );
     assert_eq!(root, Some(missing));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn hosted_open_uses_the_navigation_endpoint_for_all_workspace_indexes() {
+    let _navigation = NAVIGATION.lock().await;
+    let _state = NavigationState::isolated();
+    let directory = Workspace::new();
+    directory.symlink();
+    let canonical = std::fs::canonicalize(directory.path("canonical"))
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let (accepted, conv) =
+        open_via(directory.path("alias"), canonical.clone(), Entry::Direct).await;
+    assert!(accepted);
+    let endpoint = recents::endpoint();
+    assert_ne!(
+        endpoint,
+        conv.http_base(),
+        "the navigation key must deliberately differ from the transport origin"
+    );
+    let storage = recents::store();
+    assert!(
+        recents::load_recent_workspaces(&*storage, &conv.http_base()).is_empty(),
+        "the accepted open must not write navigation under the transport origin"
+    );
+    assert!(recents::history_workspaces(&*storage, &conv.http_base()).is_empty());
+    assert_eq!(
+        recents::load_recent_workspaces(&*storage, &endpoint)
+            .iter()
+            .map(|r| &r.path)
+            .collect::<Vec<_>>(),
+        vec![&canonical]
+    );
+    assert_eq!(
+        recents::history_workspaces(&*storage, &endpoint),
+        vec![canonical.clone()]
+    );
+    let projection = sidebar::project(&conv.store, recents::now_ms());
+    assert_eq!(projection.groups.len(), 1);
+    assert_eq!(projection.groups[0].key, canonical);
 }

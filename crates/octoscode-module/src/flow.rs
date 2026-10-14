@@ -3580,7 +3580,7 @@ impl Conversation {
                         (requested.as_deref(), r.opened.workspace_root.as_deref())
                     {
                         let recents = crate::screens::recents::remember_hosted_workspace(
-                            &*crate::screens::recents::store(), &self.http_base,
+                            &*crate::screens::recents::store(), &crate::screens::recents::endpoint(),
                             requested, opened, crate::screens::recents::now_ms(),
                         );
                         crate::screens::board1::set_recent_workspaces(recents);
