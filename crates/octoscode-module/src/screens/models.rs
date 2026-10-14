@@ -32,6 +32,33 @@ use octoscode_store::Store;
 use crate::bindings::Ctx;
 use crate::flow::Conversation;
 
+pub(super) fn model_from(v: &Value) -> Option<ProfileLlmModel> {
+    let text = |k: &str| v.get(k).and_then(|x| x.as_str()).map(str::to_owned);
+    Some(ProfileLlmModel {
+        model: text("model").filter(|s| !s.is_empty())?,
+        provider: text("provider").filter(|s| !s.is_empty())?,
+        title: text("title").unwrap_or_default(),
+        family: text("family"),
+        route: text("route"),
+        selected: v.get("selected").and_then(|b| b.as_bool())?,
+        available: v.get("available").and_then(|b| b.as_bool())?,
+    })
+}
+
+/// Shared validation for the menu and the hosted startup model read.
+pub(super) fn models_from_result(v: &Value, session: &str) -> Result<Vec<ProfileLlmModel>, String> {
+    if v.get("session_id").and_then(|s| s.as_str()) != Some(session) {
+        return Err("profile/llm/list returned another session".to_owned());
+    }
+    match v.get("models").and_then(|m| m.as_array()) {
+        Some(rows) if rows.len() <= 500 => {
+            let models: Option<Vec<ProfileLlmModel>> = rows.iter().map(model_from).collect();
+            models.ok_or_else(|| "Invalid profile/llm/list result".to_owned())
+        }
+        _ => Err("Invalid profile/llm/list result".to_owned()),
+    }
+}
+
 /// The three cards this screen owns: Stage-B id → artifacts directory under
 /// `design/stage-b/setup/cards/` (`gate_b_score` from the accepted reviews).
 pub const SCREENS: &[(&str, &str, f64)] = &[
@@ -712,7 +739,7 @@ pub async fn refresh(conv: &Conversation, store: &Store) -> Result<usize, String
                     store.domains.profile.set_effective_skills(rows.map(|rows| json!({"session_id":session,"effective_skills":rows})));
                 }
                 if scoped_models {
-                    match super::board3::seats::models_from_result(&v, &session) {
+                    match models_from_result(&v, &session) {
                         Ok(models) => store.domains.profile.set_llm_models(models),
                         Err(e) => {
                             errs.push(format!("{method}: {e}"));
